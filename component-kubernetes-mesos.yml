@@ -1,0 +1,165 @@
+application:
+  configuration:
+    configuration.operating-system: { "image": "us-east-1/ami-d85e75b0", "identity": "ubuntu" }
+    configuration.recipe-url: "https://s3.amazonaws.com/qubell-starter-kit-artifacts/qubell-bazaar/component-kubernetes-mesos-cookbooks-stable-000000.tar.gz"
+    configuration.hardwareId-slave: "m1.small"
+    configuration.port: 8888
+  interfaces:
+    configuration:
+      port: "bind(workflow#input.port)"
+      operating-system: "bind(workflow#input.operating-system)"
+      recipe-url: "bind(workflow#input.recipe-url)"
+      hardwareId-slave: "bind(workflow#input.hardwareId-slave)"
+    kubernetes:
+      kube-entity: "bind(workflow#actions.kube-entity)"
+      kube-ui: "bind(workflow#result.kube-ui)"
+  bindings:
+    - [ workflow, mesos ]  
+
+  components:
+    mesos:
+      type: reference.Submodule
+      configuration:
+        __locator.application-id: "Mesos"
+      interfaces:
+        mesos:
+          mesos-urls:
+            type: publish-signal(list<string>)
+          slave-ips:
+            type: publish-signal(list<string>)
+          slave-private:
+            type: publish-signal(list<string>)
+        zoo:
+          zoo-urls:
+            type: publish-signal(list<string>)
+    
+    workflow:
+      type: workflow.Instance
+      interfaces:
+        input:
+          operating-system: 
+             type: configuration(map<string,object>)
+             name: Compatible image
+             suggestions:
+                  "Ubuntu 14.04 [us-east]": { "image": "us-east-1/ami-d85e75b0", "identity": "ubuntu" }
+          recipe-url: configuration(string)
+          hardwareId-slave: configuration(string)
+          port: configuration(int)
+        mesos:
+          mesos-urls: consume-signal(list<string>)
+          slave-ips: consume-signal(list<string>)
+          slave-private: consume-signal(list<string>)
+        zoo:
+          zoo-urls: consume-signal(list<string>)
+        actions:
+          kube-entity: receive-command(string name, string action, list<string> uris)
+        result:
+          kube-ui: publish-signal(string)
+          kube-master-private-ip: publish-signal(string)
+      required: [mesos, zoo]
+      configuration:
+        configuration.workflows:
+          launch:
+            steps:
+              - get-signals:
+                  action: getSignals
+                  output:
+                    env: result
+              - provision-master-node:
+                  action: provisionAmazonVm
+                  precedingPhases: [ get-signals]
+                  phase: provision
+                  parameters:
+                    roleName: kubemaster
+                    imageId: "{$.operating-system.image}"
+                    vmIdentity: "{$.operating-system.identity}"
+                    hardwareId: "{$.hardwareId-slave}"
+                    targetQuantity: 1
+                    jcloudsNodeNamePrefix: "KubernetesMaster"
+                  output:
+                    ips: ips
+                    privateIps: privateips
+              - provision-slaves: ### Here we using trick with provisioning on staticIps for getting App Server ips in default  role
+                  action: provisionVms
+                  phase: provision
+                  precedingPhases: [ get-signals ]
+                  parameters:
+                    roleName: kubeslaves
+                    hardwareId: ""
+                    vmIdentity: "{$.operating-system.identity}"
+                    retryCount: 0
+                    staticIps: "{$.env.mesos.slave-ips}"
+              - install-pkgs:
+                  action: chefsolo
+                  precedingPhases: [ provision ]
+                  parameters:
+                    roles: [ kubemaster, kubeslaves ]
+                    version: "12.2.1"
+                    recipeUrl: "{$.recipe-url}"
+                    runList: ["recipe[qubell_kubernetes::pkgs]"]
+              - configure-docker-bridges:
+                  action: chefsolo
+                  precedingPhases: [ install-pkgs ]
+                  parameters:
+                    roles: [ kubeslaves ]
+                    #version: "12.2.1"
+                    recipeUrl: "{$.recipe-url}"
+                    runList:
+                      - recipe[qubell_kubernetes::docker-br]
+                    jattrs:
+                      qubell_kubernetes:
+                        nodes: "{$.env.mesos.slave-private}"
+                        port: "{$.port}"
+                        zk_hosts: "{$.env.zoo.zoo-urls}"
+              - install-kubernetes:
+                  action: chefsolo
+                  precedingPhases: [ configure-docker-bridges ]
+                  parameters:
+                    roles: [ kubemaster ]
+                    #version: "12.2.1"
+                    recipeUrl: "{$.recipe-url}"
+                    runList:
+                      - recipe[qubell_kubernetes]
+                    jattrs:
+                      qubell_kubernetes:
+                        port: "{$.port}"
+                        zk_hosts: "{$.env.zoo.zoo-urls}"
+              
+            return:
+              kube-ui: 
+                value: "http://{$.ips[0]}:{$.port}/ui"
+              kube-master-private-ip:
+                value: "{privateIps[0]}"
+          kube-entity:
+            parameters:
+              - name:
+                  description: Entity name
+              - action:
+                  description: Entity action
+              - uris:
+                  description: Source url for entity config yaml
+            steps:
+              - get-signals:
+                  action: getSignals
+                  output:
+                    signals: result
+              - run-entity-action:
+                  action: "chefrun"
+                  phase: "run-entity-action"
+                  precedingPhases: [ get-signals ]
+                  parameters:
+                    isSolo: true
+                    roles: [kubemaster]
+                    runList: ["recipe[qubell_kubernetes::kube_entity]"]
+                    recipeUrl: "{$.recipe-url}"
+                    jattrs:
+                      qubell_kubernetes:
+                        entity:
+                            name: "{$.name}"
+                            action: "{$.action}"
+                            uris: "{$.uris}"
+                        port: "{$.port}"
+                        master: "{$.kube-master-private-ip}"
+                          
+            
+            
