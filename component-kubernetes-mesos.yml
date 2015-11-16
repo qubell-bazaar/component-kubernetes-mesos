@@ -1,7 +1,7 @@
 application:
   configuration:
     configuration.operating-system: { "image": "us-east-1/ami-d85e75b0", "identity": "ubuntu" }
-    configuration.recipe-url: "https://s3.amazonaws.com/qubell-starter-kit-artifacts/qubell-bazaar/component-kubernetes-mesos-cookbooks-stable-000000.tar.gz"
+    configuration.recipe-url: "https://s3.amazonaws.com/qubell-starter-kit-artifacts/qubell-bazaar/component-kubernetes-mesos-cookbooks-stable-b74144f.tar.gz"
     configuration.hardwareId-slave: "m1.small"
     configuration.port: 8888
   interfaces:
